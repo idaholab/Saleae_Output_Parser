@@ -1,5 +1,5 @@
 ﻿This project contains code from Idaho National Laboratory's CISA's CPE program
-Github URL https://github.com/idaholab/SAlaea_Output_parser
+Github URL https://github.com/idaholab/Saleae_Output_Parser
 Licensed under BSD-3.
 
 
