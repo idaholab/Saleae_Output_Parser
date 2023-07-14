@@ -172,4 +172,4 @@ Justin Cox
 
 ## License
 
-*License information to go here*
+See `LICENSE` and `NOTICE.txt` for additional information.
