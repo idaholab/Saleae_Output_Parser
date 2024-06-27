@@ -9,7 +9,7 @@ Features:
 
 Special Features:
 * Output CAN messages by ID and data
-* Convert SPI flash chip read sessions into SRecords*
+* Convert SPI flash chip read sessions into SRecord or Raw Binary Files*
 * Filter by I2C address
 
 *\* if device is supported*
