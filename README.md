@@ -163,6 +163,14 @@ ID: 0x0000000000000102  Count:16943
 ...
 ```
 
+#### Creating a binary file from a SPI logic capture on boot:
+
+`python3 saleae_parser.py -z spi --binary --device W25Q128JVSQ spi_table.csv`
+
+This will create a `seq_read.bin` file and a `mem_map.bin` file. The `seq_read.bin` is just all of the reads in order (there may be repeated address space) and `mem_map.bin` is the whole memory space with the last set values (considers writes)
+
+You could then use a tool like `binwalk` to extract artifacts from the binary image.
+
 ## Contributing
 
 Any contribution is welcome either to fix bugs or to add functionality and additional analyzers to the script.  Please submit a pull request if you would like to contribute.
@@ -172,4 +180,4 @@ Justin Cox
 
 ## License
 
-See `LICENSE` and `NOTICE.txt` for additional information.
+See `LICENSE` and `NOTICE.txt` for additional information
