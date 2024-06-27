@@ -1,7 +1,5 @@
 """
 A python program to parse Saleae Logic Analyzer 2 export files and make them useful.
-
-Copyright 2023, Battelle Energy Alliance, LLC
 """
 
 import re
@@ -10,7 +8,7 @@ import argparse
 from argparse import RawDescriptionHelpFormatter
 from typing import List, Dict
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 def add_arguments(argument_parser: argparse.ArgumentParser) -> None:
     """
@@ -24,14 +22,18 @@ def add_arguments(argument_parser: argparse.ArgumentParser) -> None:
     """
     argument_parser.description = "A python program to parse Saleae Logic Analyzer 2 export files."
     argument_parser.epilog = "Additional Information:\n\n\
+    Reminder: Make sure to export your CSV data as Hexadecimal\n\\n\
     Analyzers (-z):\n\
         async_serial\n\
         i2c (supports --address)\n\
         can (supports --can)\n\
         spi (supports --device)\n\n\
-    Devices (-s):\n\
+    Devices (-s/--binary):\n\
         W25Q64FW\n\
         W25Q16JV\n\
+        W25Q128JVSQ\n\
+        W25Q256JV\n\
+        W25Q512JV\n\
     "
     argument_parser.add_argument('-v', '--version', action='version', version='%(prog)s ' + __version__)
 
@@ -57,6 +59,8 @@ def add_arguments(argument_parser: argparse.ArgumentParser) -> None:
         help="Special formated output for the CAN analyzer (does not work with other filters)")
     argument_parser.add_argument('-s', dest='srecord', action='store_true', 
         help="Convert output stream into srecord for compatible devices (does not work with other filters)")
+    argument_parser.add_argument('--binary', dest='binary', action='store_true', 
+        help="Convert output stream into raw binary file for compatible devices (does not work with other filters)")
     argument_parser.add_argument(dest='in_file', metavar='FILE', help="Saleae export data file")
 
 class Analyzer():
@@ -273,9 +277,12 @@ class SPI(Analyzer):
         super().__init__(args)
         self.extra_cols = ['"mosi"', '"miso"', 'Packet ID', 'MOSI', 'MISO'] 
         self.devices = {
-            "DEFAULT": {'READ': '03', 'FAST_READ': '0B', 'FAST_DUAL_READ': '3B', 'FAST_QUAD_READ': 'EB'},
-            "W25Q64FW": {'READ': '03', 'FAST_READ': '0B', 'FAST_DUAL_READ': '3B', 'FAST_QUAD_READ': 'EB'},
-            "W25Q16JV": {'READ': '03', 'FAST_READ': '0B', 'FAST_DUAL_READ': '3B', 'FAST_QUAD_READ': 'EB'}
+            "DEFAULT": {'READ': '03', 'FAST_READ': '0B', 'FAST_DUAL_READ': '3B', 'FAST_QUAD_READ': 'EB', 'SIZE': 0x3FFFFFF+256},
+            "W25Q64FW": {'READ': '03', 'FAST_READ': '0B', 'FAST_DUAL_READ': '3B', 'FAST_QUAD_READ': 'EB', 'SIZE': 0x7FFFFF+256},
+            "W25Q16JV": {'READ': '03', 'FAST_READ': '0B', 'FAST_DUAL_READ': '3B', 'FAST_QUAD_READ': 'EB', 'SIZE': 0x1FFFFF+256},
+            "W25Q128JVSQ": {'READ': '03', 'FAST_READ': '0B', 'FAST_DUAL_READ': '3B', 'FAST_QUAD_READ': 'EB', 'SIZE': 0xFFFFFF+256},
+            "W25Q256JV": {'READ': '03', 'FAST_READ': '0B', 'FAST_DUAL_READ': '3B', 'FAST_QUAD_READ': 'EB', 'SIZE': 0x1FFFFFF+256},
+            "W25Q512JV": {'READ': '03', 'FAST_READ': '0B', 'FAST_DUAL_READ': '3B', 'FAST_QUAD_READ': 'EB', 'SIZE': 0x3FFFFFF+256}
             }
 
         if args.device:
@@ -284,6 +291,8 @@ class SPI(Analyzer):
             else:
                 print("Unknown device given. Using DEFAULT")
                 self.device = self.devices['DEFAULT']
+        else:
+            self.device = self.devices['DEFAULT']
 
         for c in self.extra_cols:
             self.columns.append(c)
@@ -297,19 +306,22 @@ class SPI(Analyzer):
         Returns:
             None
         """        
-        if args.srecord:
+        if args.srecord or args.binary:
             
             first_line = False
             header_pos_count = 0
             mosi_val = ''
             miso_val = ''
             data_buf = []
-            command_found = None
+            command_found = False
             count = 0
             address = ''
+            res_count = 0
+
+            print("Reading export file...")
 
             with open(self.file, 'r') as infile:
-                for line in infile:
+                for i, line in enumerate(infile):
                     line = line.rstrip()
                     if not first_line:
                         self.headers = line.replace('"','').split(',')
@@ -319,88 +331,180 @@ class SPI(Analyzer):
                             self.header_pos[h] = header_pos_count
                             header_pos_count += 1
                     else:
+                        # Check weird case if last quote is put on newline by itself
                         values = line.split(',')
-                        if 'miso' in self.headers:
-                            mosi_val = values[self.header_pos['mosi']].replace('0x','')
-                            miso_val = values[self.header_pos['miso']].replace('0x','')
-                        elif 'MISO' in self.headers:
-                            mosi_val = values[self.header_pos['MOSI']].replace('0x','')
-                            miso_val = values[self.header_pos['MISO']].replace('0x','')
-                        else:
-                            print("Error: Can't find SPI header 'miso' or 'MISO'")
-                            return
-
-                        # Check to see if we are at a new command
-                        if command_found and count > 4:
-                            if mosi_val == self.device['READ'] or mosi_val == self.device['FAST_READ'] or mosi_val == self.device['FAST_DUAL_READ'] or mosi_val == self.device['FAST_QUAD_READ']:
-                                command_found = False
-                                self.results.append({'address': address, 'data': data_buf})
-                                address = ''
-                                data_buf = []
-                                count = 0
-
-                        if not command_found:
-                            if mosi_val == self.device['READ']:
-                                command_found = self.device['READ']
-                                count +=1
-                            elif mosi_val == self.device['FAST_READ']:
-                                command_found = self.device['FAST_READ']
-                                count +=1
-                            elif mosi_val == self.device['FAST_DUAL_READ']:
-                                command_found = self.device['FAST_DUAL_READ']
-                                count +=1
-                            elif mosi_val == self.device['FAST_QUAD_READ']:
-                                command_found = self.device['FAST_QUAD_READ']
-                                count +=1
+                        if len(values) != len(self.header_pos):
+                            line += '"'
+                        values = line.split(',')
+                        if len(values) != len(self.header_pos):
+                            print(f"WARNING: Trouble finding all columns for line {i}")
                             continue
+                        
+                        # Parser when using Export Table which contains "type" header
+                        if 'type' in self.headers:
+                            if values[self.header_pos['type']] == '"disable"':
+                                if command_found:
+                                    command_found = False
+                                    self.results.append({'address': address, 'data': data_buf})
+                                    address = ''
+                                    data_buf = []
+                                    count = 0
+                                    res_count = 0
+                                    print(f"Line number: {i}")
+                                    print(self.results[-1])
+                                else:
+                                    res_count = 0
+                                       
+                            elif values[self.header_pos['type']] == '"result"':
+                                if 'miso' in self.headers:
+                                    mosi_val = values[self.header_pos['mosi']].replace('0x','')
+                                    miso_val = values[self.header_pos['miso']].replace('0x','')
+                                else:
+                                    print("ERROR: Can't find SPI header 'miso' or 'MISO'")
+                                    return
+                                
+                                if not command_found:
+                                    if mosi_val == self.device['READ'] and res_count == 0:
+                                        command_found = self.device['READ']
+                                        count +=1
+                                    elif mosi_val == self.device['FAST_READ'] and res_count == 0:
+                                        command_found = self.device['FAST_READ']
+                                    elif mosi_val == self.device['FAST_DUAL_READ'] and res_count == 0:
+                                        command_found = self.device['FAST_DUAL_READ']
+                                    elif mosi_val == self.device['FAST_QUAD_READ'] and res_count == 0:
+                                        command_found = self.device['FAST_QUAD_READ']
+                                    else:
+                                        res_count += 1
+                                    continue
+                                else:
+                                    # If READ, first 3 bytes address, then read MISO until "type" = "disable"
+                                    # TODO: Addresses can sometimes be 4 bytes with 0x13 command (Read Data with 4 byte address)
+                                    if command_found == self.device['READ']:
+                                        if count <= 3:
+                                            address += mosi_val
+                                        elif count > 3:
+                                            data_buf.append(miso_val)
+                                        count += 1
+                                    # If FAST_READ, first 3 bytes address, skip next byte (8 dummy clocks), then read MISO until "type" = "disable"
+                                    elif command_found == self.device['FAST_READ']:
+                                        if count <= 3:
+                                            address += mosi_val
+                                        elif count == 4:
+                                            pass
+                                        elif count > 4:
+                                            data_buf.append(miso_val)
+                                        count += 1
+                                    # If FAST_DUAL_READ, first 3 bytes address, skip next byte, then read both MISO and MOSI
+                                    elif command_found == self.device['FAST_DUAL_READ']:
+                                        if count <= 3:
+                                            address += mosi_val
+                                        elif count == 4:
+                                            pass
+                                        elif count > 4:
+                                            # MISO has odd bits (7,5,3,1|7,5,3,1)
+                                            # MOSI has even bits (6,4,2,0|6,4,2,0)
+                                            a = int(miso_val,16)
+                                            b = int(mosi_val,16)
+                                            nibble_up_a = (a & 0xf0) >> 4
+                                            nibble_low_a = (a & 0x0f)
+                                            nibble_up_b = (b & 0xf0) >> 4
+                                            nibble_low_b = (b & 0x0f)
+                                            upper_byte = (((nibble_up_a&0x8)<<4) | ((nibble_up_b&0x8)<<3) | ((nibble_up_a&0x4)<<3) |
+                                                    ((nibble_up_b&0x4)<<2) | ((nibble_up_a&0x2)<<2) | ((nibble_up_b&0x2)<<1) |
+                                                    ((nibble_up_a&0x1)<<1) | (nibble_up_b&0x1))
+                                            lower_byte = (((nibble_low_a&0x8)<<4) | ((nibble_low_b&0x8)<<3) | ((nibble_low_a&0x4)<<3) |
+                                                    ((nibble_low_b&0x4)<<2) | ((nibble_low_a&0x2)<<2) | ((nibble_low_b&0x2)<<1) |
+                                                    ((nibble_low_a&0x1)<<1) | (nibble_low_b&0x1))
+                                            data_buf.append('0x{0:0{1}X}'.format(upper_byte,2).replace('0x','').upper())
+                                            data_buf.append('0x{0:0{1}X}'.format(lower_byte,2).replace('0x','').upper())
+                                        count += 1
+                                    elif command_found == self.device['FAST_QUAD_READ']:
+                                        #Need to handle custom defined columns for the other two data pins
+                                        #TODO
+                                        count +=1
+                        # Parser for SPI Analyzer export which has no "type"
+                        # TODO: This needs fixing
                         else:
-                            # If READ, read MISO until MOSI is not 0xFF
-                            if command_found == self.device['READ']:
-                                if count <= 3:
-                                    address += mosi_val
-                                #elif count > 3 and mosi_val == 'FF':
-                                elif count > 3:
-                                    data_buf.append(miso_val)
-                                count += 1
-                            # If FAST_READ, skip next byte, then read MISO until MOSI is not 0xFF
-                            elif command_found == self.device['FAST_READ']:
-                                if count <= 3:
-                                    address += mosi_val
-                                elif count == 4:
-                                    pass
-                                #elif count > 4 and mosi_val == 'FF':
-                                elif count > 4:
-                                    data_buf.append(miso_val)
-                                count += 1
-                            # If FAST_DUAL_READ, skip next byte, then read both MISO and MOSI until another command is seen
-                            elif command_found == self.device['FAST_DUAL_READ']:
-                                if count <= 3:
-                                    address += mosi_val
-                                elif count == 4:
-                                    pass
-                                elif count > 4:
-                                    # MISO has odd bits (7,5,3,1|7,5,3,1)
-                                    # MOSI has even bits (6,4,2,0|6,4,2,0)
-                                    a = int(miso_val,16)
-                                    b = int(mosi_val,16)
-                                    nibble_up_a = (a & 0xf0) >> 4
-                                    nibble_low_a = (a & 0x0f)
-                                    nibble_up_b = (b & 0xf0) >> 4
-                                    nibble_low_b = (b & 0x0f)
-                                    upper_byte = (((nibble_up_a&0x8)<<4) | ((nibble_up_b&0x8)<<3) | ((nibble_up_a&0x4)<<3) |
-                                            ((nibble_up_b&0x4)<<2) | ((nibble_up_a&0x2)<<2) | ((nibble_up_b&0x2)<<1) |
-                                            ((nibble_up_a&0x1)<<1) | (nibble_up_b&0x1))
-                                    lower_byte = (((nibble_low_a&0x8)<<4) | ((nibble_low_b&0x8)<<3) | ((nibble_low_a&0x4)<<3) |
-                                            ((nibble_low_b&0x4)<<2) | ((nibble_low_a&0x2)<<2) | ((nibble_low_b&0x2)<<1) |
-                                            ((nibble_low_a&0x1)<<1) | (nibble_low_b&0x1))
-                                    data_buf.append('0x{0:0{1}X}'.format(upper_byte,2).replace('0x','').upper())
-                                    data_buf.append('0x{0:0{1}X}'.format(lower_byte,2).replace('0x','').upper())
-                                count += 1
-                            elif command_found == self.device['FAST_QUAD_READ']:
-                                #Need to handle custom defined columns for the other two data pins
-                                #TODO
-                                count +=1
-                self.results.append({'address': address, 'data': data_buf})
+                            if 'miso' in self.headers:
+                                mosi_val = values[self.header_pos['mosi']].replace('0x','')
+                                miso_val = values[self.header_pos['miso']].replace('0x','')
+                            elif 'MISO' in self.headers:
+                                mosi_val = values[self.header_pos['MOSI']].replace('0x','')
+                                miso_val = values[self.header_pos['MISO']].replace('0x','')
+                            else:
+                                print("ERROR: Can't find SPI header 'miso' or 'MISO'")
+                                return
+                            # Check to see if we are at a new command
+                            if command_found and count > 4:
+                                if mosi_val == self.device['READ'] or mosi_val == self.device['FAST_READ'] or mosi_val == self.device['FAST_DUAL_READ'] or mosi_val == self.device['FAST_QUAD_READ']:
+                                    command_found = False
+                                    self.results.append({'address': address, 'data': data_buf})
+                                    address = ''
+                                    data_buf = []
+                                    count = 0
+                            if not command_found:
+                                if mosi_val == self.device['READ']:
+                                    command_found = self.device['READ']
+                                    count +=1
+                                elif mosi_val == self.device['FAST_READ']:
+                                    command_found = self.device['FAST_READ']
+                                    count +=1
+                                elif mosi_val == self.device['FAST_DUAL_READ']:
+                                    command_found = self.device['FAST_DUAL_READ']
+                                    count +=1
+                                elif mosi_val == self.device['FAST_QUAD_READ']:
+                                    command_found = self.device['FAST_QUAD_READ']
+                                    count +=1
+                                continue
+                            else:
+                                # If READ, read MISO until MOSI is not 0xFF
+                                if command_found == self.device['READ']:
+                                    if count <= 3:
+                                        address += mosi_val
+                                    #elif count > 3 and mosi_val == 'FF':
+                                    elif count > 3:
+                                        data_buf.append(miso_val)
+                                    count += 1
+                                # If FAST_READ, skip next byte (8 dummy clocks), then read MISO until MOSI is not 0xFF
+                                elif command_found == self.device['FAST_READ']:
+                                    if count <= 3:
+                                        address += mosi_val
+                                    elif count == 4:
+                                        pass
+                                    #elif count > 4 and mosi_val == 'FF':
+                                    elif count > 4:
+                                        data_buf.append(miso_val)
+                                    count += 1
+                                # If FAST_DUAL_READ, skip next byte, then read both MISO and MOSI until another command is seen
+                                elif command_found == self.device['FAST_DUAL_READ']:
+                                    if count <= 3:
+                                        address += mosi_val
+                                    elif count == 4:
+                                        pass
+                                    elif count > 4:
+                                        # MISO has odd bits (7,5,3,1|7,5,3,1)
+                                        # MOSI has even bits (6,4,2,0|6,4,2,0)
+                                        #print(line)
+                                        a = int(miso_val,16)
+                                        b = int(mosi_val,16)
+                                        nibble_up_a = (a & 0xf0) >> 4
+                                        nibble_low_a = (a & 0x0f)
+                                        nibble_up_b = (b & 0xf0) >> 4
+                                        nibble_low_b = (b & 0x0f)
+                                        upper_byte = (((nibble_up_a&0x8)<<4) | ((nibble_up_b&0x8)<<3) | ((nibble_up_a&0x4)<<3) |
+                                                ((nibble_up_b&0x4)<<2) | ((nibble_up_a&0x2)<<2) | ((nibble_up_b&0x2)<<1) |
+                                                ((nibble_up_a&0x1)<<1) | (nibble_up_b&0x1))
+                                        lower_byte = (((nibble_low_a&0x8)<<4) | ((nibble_low_b&0x8)<<3) | ((nibble_low_a&0x4)<<3) |
+                                                ((nibble_low_b&0x4)<<2) | ((nibble_low_a&0x2)<<2) | ((nibble_low_b&0x2)<<1) |
+                                                ((nibble_low_a&0x1)<<1) | (nibble_low_b&0x1))
+                                        data_buf.append('0x{0:0{1}X}'.format(upper_byte,2).replace('0x','').upper())
+                                        data_buf.append('0x{0:0{1}X}'.format(lower_byte,2).replace('0x','').upper())
+                                    count += 1
+                                elif command_found == self.device['FAST_QUAD_READ']:
+                                    #Need to handle custom defined columns for the other two data pins
+                                    #TODO
+                                    count +=1
+                #self.results.append({'address': address, 'data': data_buf})
         else:
             return super().read_file()
 
@@ -452,7 +556,32 @@ class SPI(Analyzer):
                     print("S2%s%s%s%s" % (byte_count, entry['address'], ''.join(chunk), checksum))
 
                     #Update address for when there are multiple chunks
-                    entry['address'] = "{:0>6x}".format(int(entry['address'], 16) + SRECORD_DATA_SIZE).upper()     
+                    entry['address'] = "{:0>6x}".format(int(entry['address'], 16) + SRECORD_DATA_SIZE).upper()
+        elif args.binary:
+            mem_map = [b'\x00']*self.device['SIZE']
+            #seq_reads = b''
+
+            print("Writing binary files...")
+            result_entry_len = len(self.results)
+            print("Writing seq_read.bin")
+            with open('seq_read.bin','wb') as fd:
+                for idx, entry in enumerate(self.results):
+                    print(f"{idx}/{result_entry_len} rows", end='\r')
+                    print(f"ADDRESS: {entry['address']}")
+                    for i, entry_byte in enumerate(entry['data']):
+                        addr_offset = int(entry['address'],16) + i
+                        print(f"Byte: {entry_byte} at offset {addr_offset} ({hex(addr_offset)}))")
+                        #print(f"addr: {entry['address']}, index: {i}, offset: {addr_offset}")
+                        mem_map[addr_offset] = bytes.fromhex(entry_byte)
+                        print(f"Value: {mem_map[addr_offset]}")
+                        #seq_reads += bytes.fromhex(entry_byte)
+                        fd.write(bytes.fromhex(entry_byte))
+
+            print("Writing mem_map.bin")
+            with open('mem_map.bin','wb') as fd:
+                for b in mem_map:
+                    fd.write(b)
+
         else:
             return super().print_results()
 
