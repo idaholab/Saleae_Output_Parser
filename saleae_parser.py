@@ -350,8 +350,8 @@ class SPI(Analyzer):
                                     data_buf = []
                                     count = 0
                                     res_count = 0
-                                    print(f"Line number: {i}")
-                                    print(self.results[-1])
+                                    #print(f"Line number: {i}")
+                                    #print(self.results[-1])
                                 else:
                                     res_count = 0
                                        
@@ -566,14 +566,14 @@ class SPI(Analyzer):
             print("Writing seq_read.bin")
             with open('seq_read.bin','wb') as fd:
                 for idx, entry in enumerate(self.results):
-                    print(f"{idx}/{result_entry_len} rows", end='\r')
-                    print(f"ADDRESS: {entry['address']}")
+                    #print(f"{idx}/{result_entry_len} rows", end='\r')
+                    #print(f"ADDRESS: {entry['address']}")
                     for i, entry_byte in enumerate(entry['data']):
                         addr_offset = int(entry['address'],16) + i
-                        print(f"Byte: {entry_byte} at offset {addr_offset} ({hex(addr_offset)}))")
+                        #print(f"Byte: {entry_byte} at offset {addr_offset} ({hex(addr_offset)}))")
                         #print(f"addr: {entry['address']}, index: {i}, offset: {addr_offset}")
                         mem_map[addr_offset] = bytes.fromhex(entry_byte)
-                        print(f"Value: {mem_map[addr_offset]}")
+                        #print(f"Value: {mem_map[addr_offset]}")
                         #seq_reads += bytes.fromhex(entry_byte)
                         fd.write(bytes.fromhex(entry_byte))
 
